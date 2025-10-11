@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: conversor-csv-parquet
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.maxUploadSize 1024"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.7
+    disk:
+      name: data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 5
