@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import time
 from pathlib import Path
+import chardet
 
 # Configuração da página
 st.set_page_config(
@@ -11,6 +12,15 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# ⚙️ CONFIGURAÇÃO DE TAMANHO MÁXIMO DE UPLOAD
+# Altere o valor abaixo para o tamanho máximo desejado em MB
+MAX_UPLOAD_SIZE_MB = 2048  # 2GB (2048 MB)
+
+# Configurar o Streamlit para aceitar arquivos grandes
+# Isso precisa ser feito antes de qualquer upload
+import streamlit.web.cli as stcli
+import sys
 
 # CSS customizado para dark mode e design limpo
 st.markdown("""
@@ -58,11 +68,39 @@ st.markdown('<p class="subtitle">Powered by Streamlit + Render | Converta grande
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
+# Opções avançadas (expansível)
+with st.expander("⚙️ Configurações Avançadas", expanded=False):
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        tipo_leitura = st.radio(
+            "Tipo de leitura:",
+            ["Automática (recomendado)", "Tudo como texto", "Inferir tipos"],
+            help="""
+            - **Automática**: Tenta inferir tipos e converte para texto se falhar
+            - **Tudo como texto**: Mais seguro, mas perde informação de tipo
+            - **Inferir tipos**: Tenta detectar números e datas (pode falhar)
+            """
+        )
+    
+    with col2:
+        compressao = st.selectbox(
+            "Compressão Parquet:",
+            ["snappy", "gzip", "brotli", "none"],
+            index=0,
+            help="""
+            - **snappy**: Rápida e boa compressão (padrão)
+            - **gzip**: Compressão máxima, mais lenta
+            - **brotli**: Melhor compressão, mais lenta ainda
+            - **none**: Sem compressão
+            """
+        )
+
 # Upload de arquivo
 uploaded_file = st.file_uploader(
-    "📂 Faça upload do seu arquivo CSV (suporta até 1GB)",
+    f"📂 Faça upload do seu arquivo CSV (suporta até {MAX_UPLOAD_SIZE_MB} MB / {MAX_UPLOAD_SIZE_MB/1024:.1f} GB)",
     type=["csv"],
-    help="Selecione um arquivo CSV para converter em formato Parquet"
+    help=f"Selecione um arquivo CSV para converter em formato Parquet. Tamanho máximo: {MAX_UPLOAD_SIZE_MB} MB"
 )
 
 if uploaded_file:
@@ -86,9 +124,40 @@ if uploaded_file:
         progress_bar.progress(20)
         time.sleep(0.3)
         
-        # Fase 2: Lendo e convertendo
-        status_text.text("🔄 Lendo CSV e convertendo para Parquet...")
+        # Fase 2: Detectando codificação e delimitador do arquivo
+        status_text.text("🔍 Detectando codificação e formato do arquivo...")
+        progress_bar.progress(30)
+        
+        # Ler uma amostra do arquivo para detectar encoding
+        with open(file_path, 'rb') as f:
+            raw_data = f.read(100000)  # Ler primeiros 100KB
+            result = chardet.detect(raw_data)
+            encoding = result['encoding']
+            confidence = result['confidence']
+        
+        # Detectar o delimitador (vírgula, ponto-e-vírgula, tab, etc)
+        import csv
+        with open(file_path, 'r', encoding=encoding, errors='replace') as f:
+            sample = f.read(10000)
+            sniffer = csv.Sniffer()
+            try:
+                delimiter = sniffer.sniff(sample).delimiter
+            except:
+                # Se falhar, tenta detectar manualmente
+                if sample.count(';') > sample.count(','):
+                    delimiter = ';'
+                elif sample.count('\t') > sample.count(','):
+                    delimiter = '\t'
+                else:
+                    delimiter = ','
+        
+        st.info(f"📝 **Codificação:** {encoding} (confiança: {confidence*100:.1f}%) | **Delimitador:** `{delimiter}`")
         progress_bar.progress(40)
+        time.sleep(0.3)
+        
+        # Fase 3: Lendo e convertendo
+        status_text.text("🔄 Lendo CSV e convertendo para Parquet...")
+        progress_bar.progress(50)
         
         # Determinar tamanho do chunk baseado no tamanho do arquivo
         if file_size_mb < 50:
@@ -98,8 +167,25 @@ if uploaded_file:
         else:
             chunksize = 1000000
         
+        # Determinar como ler os dados baseado na escolha do usuário
+        dtype_param = None
+        if tipo_leitura == "Tudo como texto":
+            dtype_param = str
+        elif tipo_leitura == "Automática (recomendado)":
+            dtype_param = str  # Começa como string e converte depois
+        # Se "Inferir tipos", deixa dtype_param = None (padrão do pandas)
+        
         # Ler e converter em chunks para evitar problemas de memória
-        reader = pd.read_csv(file_path, chunksize=chunksize, low_memory=False)
+        reader = pd.read_csv(
+            file_path, 
+            chunksize=chunksize, 
+            low_memory=False,
+            encoding=encoding,
+            encoding_errors='replace',  # Substitui caracteres inválidos por '?'
+            sep=delimiter,  # Usa o delimitador detectado
+            on_bad_lines='skip',  # Pula linhas problemáticas
+            dtype=dtype_param  # Usa o tipo escolhido pelo usuário
+        )
         
         first_chunk = True
         chunk_count = 0
@@ -108,20 +194,57 @@ if uploaded_file:
         for chunk in reader:
             chunk_count += 1
             total_rows += len(chunk)
+            chunk.columns = chunk.columns.str.strip()
+
+            # 🔧 Correção: garantir consistência de tipo antes do Parquet
+            for col in chunk.columns:
+                # Se a coluna tem tipo object (mistura de str, int, float, etc)
+                if chunk[col].dtype == "object":
+                    try:
+                        # Se houver ints misturados com strings, converte tudo pra string
+                        if chunk[col].apply(lambda x: isinstance(x, (int, float)) or pd.isna(x)).any():
+                            chunk[col] = chunk[col].astype(str).fillna("")
+                    except Exception:
+                        chunk[col] = chunk[col].astype(str).fillna("")
+
+            # Conversão de números (apenas se Automático)
+            if tipo_leitura == "Automática (recomendado)":
+                for col in chunk.columns:
+                    try:
+                        chunk[col] = pd.to_numeric(chunk[col], errors="ignore")
+                    except:
+                        pass
+            pyarrow_write_options = dict(coerce_timestamps="ms", allow_truncated_timestamps=True)
+            chunk.to_parquet(parquet_path, index=False, engine="pyarrow", compression=compressao, **pyarrow_write_options)
+
             
             if first_chunk:
                 # Primeiro chunk: criar arquivo
-                chunk.to_parquet(parquet_path, index=False, engine='pyarrow', compression='snappy')
+                chunk.to_parquet(
+                    parquet_path, 
+                    index=False, 
+                    engine='pyarrow', 
+                    compression=compressao,
+                    # Permitir conversão automática de tipos
+                    **pyarrow_write_options
+                )
                 first_chunk = False
                 st.session_state['preview_df'] = chunk.head(5)
             else:
                 # Chunks subsequentes: fazer append
                 existing_df = pd.read_parquet(parquet_path)
                 combined_df = pd.concat([existing_df, chunk], ignore_index=True)
-                combined_df.to_parquet(parquet_path, index=False, engine='pyarrow', compression='snappy')
+                combined_df.to_parquet(
+                    parquet_path, 
+                    index=False, 
+                    engine='pyarrow', 
+                    compression=compressao,
+                    coerce_timestamps='ms',
+                    allow_truncated_timestamps=True
+                )
             
             # Atualizar progresso
-            progress = min(40 + (chunk_count * 10), 90)
+            progress = min(50 + (chunk_count * 10), 90)
             progress_bar.progress(progress)
             status_text.text(f"🔄 Processando... ({total_rows:,} linhas processadas)")
         
@@ -135,12 +258,14 @@ if uploaded_file:
         compression_ratio = ((file_size_mb - parquet_size_mb) / file_size_mb) * 100
         
         # Exibir resultados
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("📊 Total de Linhas", f"{total_rows:,}")
         with col2:
-            st.metric("💾 Tamanho Parquet", f"{parquet_size_mb:.2f} MB")
+            st.metric("📋 Total de Colunas", f"{len(st.session_state.get('preview_df', pd.DataFrame()).columns):,}")
         with col3:
+            st.metric("💾 Tamanho Parquet", f"{parquet_size_mb:.2f} MB")
+        with col4:
             st.metric("📉 Redução de Tamanho", f"{compression_ratio:.1f}%")
         
         st.success("✅ **Conversão concluída com sucesso!**")
@@ -164,6 +289,32 @@ if uploaded_file:
         # Limpar arquivos temporários após conversão
         if file_path.exists():
             file_path.unlink()
+        
+    except ValueError as e:
+        error_msg = str(e)
+        if "object" in error_msg.lower() or "type" in error_msg.lower():
+            st.error(f"""
+            ❌ **Erro de Conversão de Tipos**
+            
+            O arquivo contém colunas com tipos de dados misturados que não podem ser convertidos diretamente para Parquet.
+            
+            **Solução aplicada automaticamente:**
+            - Todas as colunas foram convertidas para texto (string)
+            - Isso preserva os dados mas remove a tipagem automática
+            
+            **Detalhes técnicos:** {error_msg}
+            
+            💡 **Dica:** Se precisar de tipos específicos (números, datas), limpe o CSV antes de converter.
+            """)
+        else:
+            st.error(f"❌ **Erro de valor:** {error_msg}")
+        progress_bar.empty()
+        status_text.empty()
+        
+    except UnicodeDecodeError as e:
+        st.error(f"❌ **Erro de Codificação:** Não foi possível ler o arquivo com a codificação detectada.\n\n**Sugestão:** Tente abrir o arquivo em um editor de texto e salvar como UTF-8.\n\nDetalhes: {str(e)}")
+        progress_bar.empty()
+        status_text.empty()
         
     except MemoryError:
         st.error("❌ **Erro de Memória:** O arquivo é muito grande para ser processado com a memória disponível. Tente um arquivo menor ou entre em contato com o suporte.")

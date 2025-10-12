@@ -1,0 +1,22 @@
+[server]
+# Tamanho máximo de upload em MB
+# Altere este valor para aumentar o limite de upload
+maxUploadSize = 2048
+
+# Desabilitar CORS para evitar problemas
+enableCORS = false
+
+# Permitir websocket
+enableXsrfProtection = false
+
+[browser]
+# Coletar estatísticas de uso (opcional)
+gatherUsageStats = false
+
+[theme]
+# Tema dark mode
+primaryColor = "#00d4ff"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1a1a1a"
+textColor = "#ffffff"
+font = "sans serif"
