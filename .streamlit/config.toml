@@ -1,7 +1,7 @@
 [server]
 # Tamanho máximo de upload em MB
 # Altere este valor para aumentar o limite de upload
-maxUploadSize = 2048
+maxUploadSize = 1024
 
 # Desabilitar CORS para evitar problemas
 enableCORS = false
