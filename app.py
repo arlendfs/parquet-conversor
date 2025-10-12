@@ -15,7 +15,7 @@ st.set_page_config(
 
 # ⚙️ CONFIGURAÇÃO DE TAMANHO MÁXIMO DE UPLOAD
 # Altere o valor abaixo para o tamanho máximo desejado em MB
-MAX_UPLOAD_SIZE_MB = 2048  # 2GB (2048 MB)
+MAX_UPLOAD_SIZE_MB = 1024  # 1GB (1024 MB)
 
 # Configurar o Streamlit para aceitar arquivos grandes
 # Isso precisa ser feito antes de qualquer upload
