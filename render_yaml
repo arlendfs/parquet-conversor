@@ -3,13 +3,24 @@ services:
     name: conversor-csv-parquet
     env: python
     region: oregon
-    plan: free
+    plan: starter  # Upgrade para Starter ($7/mês) com 512MB → 2GB RAM
     buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
-    startCommand: "streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.maxUploadSize 1024"
+    startCommand: "streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.maxUploadSize 2048 --server.maxMessageSize 2048"
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.7
+      - key: STREAMLIT_SERVER_MAX_UPLOAD_SIZE
+        value: 2048
+      - key: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+        value: false
+      - key: STREAMLIT_SERVER_ENABLE_CORS
+        value: false
+      - key: STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION
+        value: true
     disk:
       name: data
       mountPath: /opt/render/project/src/data
-      sizeGB: 5
+      sizeGB: 10
+    # Configurações de health check
+    healthCheckPath: /_stcore/health
+    autoDeploy: true

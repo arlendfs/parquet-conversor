@@ -159,13 +159,34 @@ if uploaded_file:
         status_text.text("🔄 Lendo CSV e convertendo para Parquet...")
         progress_bar.progress(50)
         
-        # Determinar tamanho do chunk baseado no tamanho do arquivo
-        if file_size_mb < 50:
-            chunksize = 100000
-        elif file_size_mb < 200:
-            chunksize = 500000
+        # Determinar tamanho do chunk baseado no tamanho do arquivo E plano do servidor
+        # Para arquivos grandes no Render FREE, usar chunks muito menores
+        import platform
+        import psutil
+        
+        # Detectar memória disponível
+        try:
+            available_memory_gb = psutil.virtual_memory().available / (1024**3)
+        except:
+            available_memory_gb = 2  # Assume 2GB se não conseguir detectar
+        
+        # Ajustar chunksize baseado em memória disponível
+        if available_memory_gb < 1:  # Render FREE (512MB)
+            st.warning("⚠️ Memória baixa detectada. Usando chunks menores para processamento...")
+            if file_size_mb < 50:
+                chunksize = 50000  # 50k linhas
+            elif file_size_mb < 100:
+                chunksize = 25000  # 25k linhas
+            else:
+                chunksize = 10000  # 10k linhas (muito conservador)
         else:
-            chunksize = 1000000
+            # Servidor com boa memória
+            if file_size_mb < 50:
+                chunksize = 100000
+            elif file_size_mb < 200:
+                chunksize = 500000
+            else:
+                chunksize = 1000000
         
         # Determinar como ler os dados baseado na escolha do usuário
         dtype_param = None
