@@ -15,7 +15,7 @@ st.set_page_config(
 
 # ⚙️ CONFIGURAÇÃO DE TAMANHO MÁXIMO DE UPLOAD
 # Altere o valor abaixo para o tamanho máximo desejado em MB
-MAX_UPLOAD_SIZE_MB = 1024  # 1GB (1024 MB)
+MAX_UPLOAD_SIZE_MB = 2048  # 2GB (2048 MB)
 
 # Configurar o Streamlit para aceitar arquivos grandes
 # Isso precisa ser feito antes de qualquer upload
@@ -194,29 +194,25 @@ if uploaded_file:
         for chunk in reader:
             chunk_count += 1
             total_rows += len(chunk)
+            
+            # Limpar colunas com nomes problemáticos
             chunk.columns = chunk.columns.str.strip()
-
-            # 🔧 Correção: garantir consistência de tipo antes do Parquet
-            for col in chunk.columns:
-                # Se a coluna tem tipo object (mistura de str, int, float, etc)
-                if chunk[col].dtype == "object":
-                    try:
-                        # Se houver ints misturados com strings, converte tudo pra string
-                        if chunk[col].apply(lambda x: isinstance(x, (int, float)) or pd.isna(x)).any():
-                            chunk[col] = chunk[col].astype(str).fillna("")
-                    except Exception:
-                        chunk[col] = chunk[col].astype(str).fillna("")
-
-            # Conversão de números (apenas se Automático)
+            
+            # Converter colunas numéricas de forma segura (apenas no modo Automático)
             if tipo_leitura == "Automática (recomendado)":
                 for col in chunk.columns:
+                    # Tenta converter para numérico se possível
                     try:
-                        chunk[col] = pd.to_numeric(chunk[col], errors="ignore")
+                        # Remove espaços em branco
+                        chunk[col] = chunk[col].str.strip() if chunk[col].dtype == 'object' else chunk[col]
+                        
+                        # Tenta converter para numérico
+                        numeric_col = pd.to_numeric(chunk[col], errors='ignore')
+                        if numeric_col.dtype in ['int64', 'float64']:
+                            chunk[col] = numeric_col
                     except:
+                        # Se falhar, mantém como string
                         pass
-            pyarrow_write_options = dict(coerce_timestamps="ms", allow_truncated_timestamps=True)
-            chunk.to_parquet(parquet_path, index=False, engine="pyarrow", compression=compressao, **pyarrow_write_options)
-
             
             if first_chunk:
                 # Primeiro chunk: criar arquivo
@@ -226,7 +222,8 @@ if uploaded_file:
                     engine='pyarrow', 
                     compression=compressao,
                     # Permitir conversão automática de tipos
-                    **pyarrow_write_options
+                    coerce_timestamps='ms',
+                    allow_truncated_timestamps=True
                 )
                 first_chunk = False
                 st.session_state['preview_df'] = chunk.head(5)
@@ -312,7 +309,35 @@ if uploaded_file:
         status_text.empty()
         
     except UnicodeDecodeError as e:
-        st.error(f"❌ **Erro de Codificação:** Não foi possível ler o arquivo com a codificação detectada.\n\n**Sugestão:** Tente abrir o arquivo em um editor de texto e salvar como UTF-8.\n\nDetalhes: {str(e)}")
+        st.error(f"""
+        ❌ **Erro de Codificação**
+        
+        Não foi possível ler o arquivo com a codificação detectada ({encoding}).
+        
+        **💡 Soluções:**
+        
+        1. **Tente converter o CSV manualmente:**
+           - Abra o arquivo em um editor de texto (Notepad++, VSCode, etc)
+           - Salve como UTF-8
+           - Faça upload novamente
+        
+        2. **Ou tente estes comandos Python:**
+        ```python
+        import pandas as pd
+        
+        # Tenta ler com diferentes encodings
+        for enc in ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-16']:
+            try:
+                df = pd.read_csv('seu_arquivo.csv', encoding=enc, sep=';')
+                print(f"✅ Funcionou com: {{enc}}")
+                df.to_csv('arquivo_corrigido.csv', encoding='utf-8', sep=';', index=False)
+                break
+            except:
+                print(f"❌ Falhou com: {{enc}}")
+        ```
+        
+        **Detalhes técnicos:** {str(e)}
+        """)
         progress_bar.empty()
         status_text.empty()
         
